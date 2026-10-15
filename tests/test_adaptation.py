@@ -1,5 +1,8 @@
 import random
 
+import pytest
+
+import adaptation
 from adaptation import (
     BASELINE, TraitProfile, learn, reflect, retrieve, sentiment, valence,
 )
@@ -68,8 +71,29 @@ def test_sentiment_reflects_emotions():
 def test_reinforce_raises_trait_and_lowers_opposite():
     p = TraitProfile()
     p.reinforce(Personality.BOLD, 0.2)
-    assert p.strengths[Personality.BOLD] == BASELINE + 0.2
-    assert p.strengths[Personality.CAUTIOUS] == BASELINE - 0.1
+    gain = 0.2 * (1 - BASELINE)                    # diminishing returns
+    assert p.strengths[Personality.BOLD] == pytest.approx(BASELINE + gain)
+    assert p.strengths[Personality.CAUTIOUS] == pytest.approx(BASELINE - gain / 2)
+
+
+def test_reinforcement_has_diminishing_returns():
+    p = TraitProfile()
+    gains = []
+    for _ in range(30):
+        before = p.strengths[Personality.BOLD]
+        p.reinforce(Personality.BOLD, 0.2)
+        gains.append(p.strengths[Personality.BOLD] - before)
+    assert all(a > b > 0 for a, b in zip(gains, gains[1:]))   # strictly shrinking
+    assert p.strengths[Personality.BOLD] < 1.0                # never saturates
+
+
+def test_learning_rate_scales_how_fast_traits_move(monkeypatch):
+    def after(rate):
+        monkeypatch.setattr(adaptation, "LEARNING_RATE", rate)
+        p = TraitProfile()
+        learn(p, "socialize", EmotionLayer.HAPPY)
+        return p.strengths[Personality.EXTROVERTED] - BASELINE
+    assert after(1.0) == pytest.approx(10 * after(0.1))
 
 
 def test_strengths_stay_in_range():
@@ -106,7 +130,9 @@ def test_learn_applies_lessons():
     assert p.strengths == before
 
 
-def test_personality_can_change_through_experience():
+def test_personality_can_change_through_experience(monkeypatch):
+    # Personality is slow by default; speed learning up so 80 ticks is enough.
+    monkeypatch.setattr(adaptation, "LEARNING_RATE", 1.0)
     a = agent(Personality.SHY, hunger=0.0, fatigue=0.0, loneliness=0.9,
               hunger_rate=0, fatigue_rate=0)
     for _ in range(80):

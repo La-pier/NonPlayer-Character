@@ -80,18 +80,22 @@ def test_log_is_in_time_order(world):
 
 def test_log_trust_replay_reproduces_final_trust(world):
     """The history must fully explain the state: replaying every logged trust
-    change from scratch lands exactly on each NPC's actual trust values."""
-    replay = {i: {} for i in world.agents}
+    change, plus the documented grudge-decay law, lands on each NPC's actual
+    trust values."""
+    decay = world.log.of_type("config")[0]["grudge_decay"]
+    replay = {i: {} for i in world.agents}          # owner -> other -> (trust, tick)
     for r in world.log.of_type("interaction"):
-        replay[r["a"]][r["b"]] = r["trust_ab"]
-        replay[r["b"]][r["a"]] = r["trust_ba"]
+        replay[r["a"]][r["b"]] = (r["trust_ab"], r["tick"])
+        replay[r["b"]][r["a"]] = (r["trust_ba"], r["tick"])
         for third, t in (r.get("listener_trust") or {}).items():
-            replay[r["b"]][third] = t
+            replay[r["b"]][third] = (t, r["tick"])
     for i, ag in world.agents.items():
         actual = ag.npc.social.trust
         assert set(replay[i]) == set(actual), i
-        for other, t in actual.items():
-            assert replay[i][other] == pytest.approx(t, abs=1e-6), (i, other)
+        for other, (t, tick) in replay[i].items():
+            if t < 0:           # grudges fade once per tick after the logged moment
+                t *= (1 - decay) ** (world.tick - tick)
+            assert t == pytest.approx(actual[other], abs=1e-5), (i, other)
 
 
 def test_log_personality_replay_reproduces_final_personality(world):

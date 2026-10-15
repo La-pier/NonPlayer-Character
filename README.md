@@ -29,3 +29,29 @@ trust changes reproduces each NPC's final trust exactly (tested).
 **Golden run.** `tests/golden.json` pins one run. If you change behaviour on
 purpose, run `python tests/update_golden.py` and review the diff in the commit.
 It is recorded per Python version and skipped on a different one.
+
+## Behaviour balance
+
+The history log showed the first version was lopsided: goal pursuit was 35% of
+all actions, a third of encounters were arguments, NPCs ended with ~3 enemies
+each, and the six starting personalities collapsed to three. Causes and fixes
+(constant, file):
+
+| Cause | Fix |
+| --- | --- |
+| Strangers had a coin-flip chance of arguing, and every argument made the next worse | `GOODWILL_BASE = 0.6` (`social.py`) |
+| Grudges never faded, so enemies only accumulated | `GRUDGE_DECAY = 0.002` per tick, applied world-wide before anyone acts (`social.py`) |
+| Traits changed within tens of ticks and reinforced themselves, converging everyone | `LEARNING_RATE = 0.1`, and reinforcement has diminishing returns (`adaptation.py`) |
+| Goal pursuit had a constant score, so it was the default idle action | `purpose` is a drive that builds (`purpose_rate = 0.08`) and is relieved by acting (`PURPOSE_RELIEF`) (`autonomy.py`) |
+| Happy memories fed on themselves, inflating socialising | `SENTIMENT_WEIGHT = 0.2` (`autonomy.py`) |
+
+Targets: no action above ~30% or below 5%; arguments 12-22% of encounters;
+about one enemy per NPC; most personality types survive. Measure with
+`python tools/balance_report.py` (use seeds you did not tune on), and
+`tests/test_balance.py` guards the shape of the behaviour.
+
+Known limits: over very long runs (1000+ ticks) the society keeps warming up
+(socialising drifts to ~33%, arguments to ~10%) because positive trust never
+fades, and personality is nearly frozen at this learning rate. Learning is
+still driven by what an NPC does rather than by outcomes, which is why fast
+learning homogenises; outcome-driven learning is the proper next step.

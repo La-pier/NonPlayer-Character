@@ -354,3 +354,44 @@ def test_dead_npcs_are_ignored_by_the_world():
     for _ in range(50):
         s = w.step()
         assert all(victim.npc.npc_id not in (i.a, i.b) for i in s["interactions"])
+
+
+# --- forgiveness and baseline goodwill ----------------------------------------------------
+
+def test_forgive_fades_grudges_only():
+    soc = SocialIntelligence()
+    soc.adjust_trust("foe", -0.9)
+    soc.adjust_trust("friend", 0.9)
+    soc.forgive(0.1)
+    assert soc.trust_of("foe") == pytest.approx(-0.81)
+    assert soc.trust_of("friend") == 0.9
+
+
+def test_forgiven_enemy_eventually_becomes_neutral():
+    soc = SocialIntelligence()
+    soc.adjust_trust("foe", -0.9)
+    assert soc.relationship_with("foe") == RelationshipLayer.ENEMY
+    for _ in range(100):
+        soc.forgive(0.05)
+    assert soc.relationship_with("foe") == RelationshipLayer.NEUTRAL
+    assert soc.trust_of("foe") < 0          # never flips to positive
+
+
+def test_world_forgives_before_anyone_acts():
+    import social
+    w = World(random.Random(0), meet_base=0.0, meet_friend=0.0)   # nobody meets
+    a, b = make("a"), make("b")
+    w.add(a); w.add(b)
+    a.npc.social.adjust_trust(b.npc.npc_id, -0.8)
+    for _ in range(10):
+        w.step()
+    expected = -0.8 * (1 - social.GRUDGE_DECAY) ** 10
+    assert a.npc.social.trust_of(b.npc.npc_id) == pytest.approx(expected)
+
+
+def test_strangers_usually_get_along():
+    # Neutral temperaments, no history: the baseline chance applies.
+    import social
+    a, b = make("a"), make("b")
+    assert goodwill(a.npc, b.npc) == pytest.approx(social.GOODWILL_BASE)
+    assert social.GOODWILL_BASE > 0.5      # a first meeting should not be a coin flip
