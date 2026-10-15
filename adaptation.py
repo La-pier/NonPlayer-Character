@@ -80,10 +80,14 @@ class TraitProfile:
         return prof
 
     def reinforce(self, trait: Personality, amount: float) -> None:
-        self.strengths[trait] = _clamp(self.strengths[trait] + amount)
+        """Strengthen a trait with diminishing returns: the nearer it is to 1,
+        the less a further nudge adds. Without this, using a trait strengthens
+        it, which makes it used more, and one trait swallows the population."""
+        gain = amount * (1.0 - self.strengths[trait])
+        self.strengths[trait] = _clamp(self.strengths[trait] + gain)
         opp = OPPOSITES.get(trait)
         if opp is not None:
-            self.strengths[opp] = _clamp(self.strengths[opp] - amount / 2)
+            self.strengths[opp] = _clamp(self.strengths[opp] - gain / 2)
 
     def tick(self) -> None:
         for p, v in self.strengths.items():
@@ -114,11 +118,16 @@ LESSONS: Dict[tuple, List[tuple]] = {
 }
 
 
+# How strongly each experience shapes personality. Personality is meant to be
+# slow to change; at 1.0 a trait saturates within tens of ticks.
+LEARNING_RATE = 0.1
+
+
 def learn(profile: TraitProfile, action: str, emotion: Optional[EmotionLayer]) -> None:
     """Apply the lesson for (action, emotion), else the emotion-agnostic one."""
     lessons = LESSONS.get((action, emotion)) or LESSONS.get((action, None), [])
     for trait, amount in lessons:
-        profile.reinforce(trait, amount)
+        profile.reinforce(trait, amount * LEARNING_RATE)
 
 
 # -- reflection --------------------------------------------------------------

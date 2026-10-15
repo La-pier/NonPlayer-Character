@@ -29,14 +29,17 @@ class Needs:
     hunger: float = 0.2
     fatigue: float = 0.2
     loneliness: float = 0.2
+    purpose: float = 0.2        # the urge to work toward one's goals
     hunger_rate: float = 0.05
     fatigue_rate: float = 0.04
     loneliness_rate: float = 0.03
+    purpose_rate: float = 0.08
 
     def tick(self) -> None:
         self.hunger = _clamp(self.hunger + self.hunger_rate)
         self.fatigue = _clamp(self.fatigue + self.fatigue_rate)
         self.loneliness = _clamp(self.loneliness + self.loneliness_rate)
+        self.purpose = _clamp(self.purpose + self.purpose_rate)
 
 
 @dataclass
@@ -67,6 +70,14 @@ class Perception:
 def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, x))
 
+
+# How much working toward a goal satisfies the urge to do so.
+PURPOSE_RELIEF = 0.4
+
+# How much good or bad past experience with the NPCs nearby sways the urge to
+# socialize. Too high and happy memories feed on themselves (more socialising,
+# more happy memories).
+SENTIMENT_WEIGHT = 0.2
 
 PERSONALITY_BIAS: Dict[Personality, Dict[Action, float]] = {
     Personality.BOLD: {Action.AVOID: -0.3},
@@ -115,7 +126,7 @@ class Agent:
             Action.SEEK_FOOD: n.hunger * (1.0 if p.food_available else 0.3),
             Action.REST: n.fatigue,
             Action.SOCIALIZE: 0.0,
-            Action.PURSUE_GOAL: 0.3 if ind.goals else 0.0,
+            Action.PURSUE_GOAL: n.purpose if ind.goals else 0.0,
         }
         if p.nearby:
             friend = any(soc.relationship_with(i) == RelationshipLayer.FRIEND
@@ -124,7 +135,7 @@ class Agent:
             feeling = sentiment(ind, [f"npc:{i}" for i in p.nearby])
             scores[Action.SOCIALIZE] = (n.loneliness + (0.2 if friend else 0.0)
                                         + (0.1 if ind.emotion == EmotionLayer.HAPPY
-                                           else 0.0) + 0.3 * feeling)
+                                           else 0.0) + SENTIMENT_WEIGHT * feeling)
         if threat > 0 and BeliefLayer.PESSIMISTIC in ind.beliefs:
             scores[Action.AVOID] += 0.1
         for action, bias in PERSONALITY_BIAS.get(ind.personality, {}).items():
@@ -184,6 +195,7 @@ class Agent:
             event.update(content="avoided danger", emotion=EmotionLayer.FEARFUL,
                          salience=0.6, tags=("danger",))
         elif action == Action.PURSUE_GOAL and ind.goals:
+            n.purpose = _clamp(n.purpose - PURPOSE_RELIEF)
             event.update(content=f"worked toward {ind.goals[0].value}", salience=0.3)
         return event
 
@@ -217,7 +229,7 @@ class Agent:
             tick=tick, action=action, partner=self.last_partner,
             what=event["content"], threat=p.threat, nearby=list(p.nearby),
             needs={"hunger": n.hunger, "fatigue": n.fatigue,
-                   "loneliness": n.loneliness},
+                   "loneliness": n.loneliness, "purpose": n.purpose},
             emotion=self.npc.individual.emotion, personality_before=before,
             personality_after=self.npc.individual.personality,
             changes=layer_changes.get("individual", {}), reflection=reflection)

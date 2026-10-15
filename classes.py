@@ -445,6 +445,12 @@ class SocialIntelligence(IntelligenceBase):
 
     trust: Dict[str, float] = field(default_factory=dict)  # npc_id -> -1..1
 
+    def forgive(self, rate: float) -> None:
+        """Let grudges fade: move every negative trust a fraction `rate` toward 0."""
+        for npc_id, t in sorted(self.trust.items()):
+            if t < 0:
+                self.adjust_trust(npc_id, -t * rate)
+
     def set_relationship(self, npc_id: str, kind: RelationshipLayer) -> None:
         self.relationships[npc_id] = kind
 

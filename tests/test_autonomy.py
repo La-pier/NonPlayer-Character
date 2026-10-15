@@ -104,3 +104,44 @@ def test_long_run_keeps_needs_bounded_and_npc_alive():
     assert all(0.0 <= v <= 1.0 for v in (n.hunger, n.fatigue, n.loneliness))
     assert a.npc.state == NPCState.ACTIVE
     assert len(a.npc.individual.recall()) <= 500
+
+
+# --- purpose: goal pursuit is a drive, not the default idle action -----------------------------
+
+def test_purpose_rises_each_tick_and_clamps():
+    n = Needs(purpose=0.95)
+    n.tick()
+    assert n.purpose == 1.0
+    n = Needs()
+    n.tick()
+    assert n.purpose == pytest.approx(0.2 + n.purpose_rate)
+
+
+def test_no_goals_means_no_pursuit_urge():
+    a = agent(hunger=0.0, fatigue=0.0, loneliness=0.0, purpose=1.0)
+    assert a.npc.individual.goals == []
+    assert a.score(Perception())[Action.PURSUE_GOAL] == 0.0
+
+
+def test_pursuing_a_goal_relieves_purpose_so_it_is_not_endless():
+    from autonomy import PURPOSE_RELIEF
+    a = agent(Personality.CAUTIOUS, hunger=0.0, fatigue=0.0, loneliness=0.0,
+              purpose=0.9, hunger_rate=0, fatigue_rate=0, loneliness_rate=0,
+              purpose_rate=0.05)
+    a.npc.individual.goals.append(GoalLayer.KNOWLEDGE)
+    assert a.step(Perception()) == Action.PURSUE_GOAL
+    assert a.needs.purpose == pytest.approx(0.9 + 0.05 - PURPOSE_RELIEF)
+    # the urge itself is what competes with other actions, and it just dropped
+    assert a.score(Perception())[Action.PURSUE_GOAL] == pytest.approx(a.needs.purpose)
+    assert a.needs.purpose < 0.95 - PURPOSE_RELIEF + 1e-9
+
+
+def test_goal_pursuit_share_is_bounded_when_idle():
+    """With every other need satisfied the agent still doesn't pursue goals
+    every tick (the old constant score made that the default)."""
+    a = agent(Personality.CAUTIOUS, hunger=0.0, fatigue=0.0, loneliness=0.0,
+              hunger_rate=0, fatigue_rate=0, loneliness_rate=0)
+    a.npc.individual.goals.append(GoalLayer.KNOWLEDGE)
+    acts = [a.step(Perception()) for _ in range(100)]
+    share = acts.count(Action.PURSUE_GOAL) / len(acts)
+    assert 0.05 < share < 0.6

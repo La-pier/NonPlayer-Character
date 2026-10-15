@@ -36,6 +36,14 @@ class Interaction:
 
 # -- interaction ---------------------------------------------------------------
 
+# Chance two strangers get along (before temperament and history).
+GOODWILL_BASE = 0.6
+
+# Fraction of any grudge forgiven per tick (world time passing, applied to
+# everyone before anyone acts). Without it one bad meeting can make permanent
+# enemies, and enemy-avoidance snowballs.
+GRUDGE_DECAY = 0.002
+
 PERSONALITY_MOOD = {
     Personality.EXTROVERTED: 0.08, Personality.OPTIMISTIC: 0.05,
     Personality.PESSIMISTIC: -0.05, Personality.BOLD: -0.03,
@@ -44,7 +52,7 @@ PERSONALITY_MOOD = {
 
 def goodwill(a: NPC, b: NPC) -> float:
     """Chance an encounter goes well, from existing trust and temperaments."""
-    p = 0.5 + 0.35 * (a.social.trust_of(b.npc_id) + b.social.trust_of(a.npc_id)) / 2
+    p = GOODWILL_BASE + 0.35 * (a.social.trust_of(b.npc_id) + b.social.trust_of(a.npc_id)) / 2
     for npc in (a, b):
         p += PERSONALITY_MOOD.get(npc.individual.personality, 0.0)
     if (a.individual.personality == Personality.AMBITIOUS
@@ -292,6 +300,11 @@ class World:
     interactions: List[Interaction] = field(default_factory=list)
     log: EventLog = field(default_factory=EventLog)
 
+    def __post_init__(self) -> None:
+        # Make the history self-describing: replaying it needs these constants.
+        self.log.add("config", 0, grudge_decay=GRUDGE_DECAY,
+                     goodwill_base=GOODWILL_BASE)
+
     def add(self, agent: Agent) -> None:
         if agent.npc.state == NPCState.INITIAL:
             agent.npc.activate()
@@ -318,6 +331,9 @@ class World:
 
     def step(self) -> Dict[str, object]:
         self.tick += 1
+        for agent in self.agents.values():          # time passes for everyone first
+            if agent.npc.is_alive:
+                agent.npc.social.forgive(GRUDGE_DECAY)
         order = sorted(self.agents)
         self.rng.shuffle(order)
         done: Set[frozenset] = set()
