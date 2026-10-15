@@ -396,7 +396,8 @@ class IndividualIntelligence(IntelligenceBase):
         overflow = len(short) - self.short_term_limit
         if overflow > 0:
             forgotten = sorted(short, key=lambda m: (m.salience, m.timestamp))[:overflow]
-            self.memories = [m for m in self.memories if m not in forgotten]
+            drop = {id(m) for m in forgotten}
+            self.memories = [m for m in self.memories if id(m) not in drop]
             return overflow
         return 0
 
