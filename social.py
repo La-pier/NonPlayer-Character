@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
 from autonomy import Action, Agent, Perception
+from history import EventLog
 from classes import (
     NPC, AllianceLayer, EmergentIntelligence, EmotionLayer, InstitutionLayer,
     LeadershipLayer, NPCState, Personality,
@@ -28,6 +29,9 @@ class Interaction:
     kind: InteractionKind
     a: str
     b: str
+    trust_ab: float = 0.0            # a's trust in b after the encounter
+    trust_ba: float = 0.0
+    detail: Dict[str, object] = field(default_factory=dict)   # e.g. gossip topics
 
 
 # -- interaction ---------------------------------------------------------------
@@ -50,36 +54,43 @@ def goodwill(a: NPC, b: NPC) -> float:
 
 
 def _record(npc: NPC, other: NPC, text: str, emotion: EmotionLayer,
-            salience: float) -> None:
+            salience: float, tick: int = 0) -> None:
     ind = npc.individual
     ind.emotion = emotion
-    ind.remember(text, emotion, salience, tags=("social", f"npc:{other.npc_id}"))
+    ind.remember(text, emotion, salience, tags=("social", f"npc:{other.npc_id}"),
+                 tick=tick)
+    ind.consolidate()
 
 
-def interact(a: Agent, b: Agent, rng: random.Random) -> Interaction:
+def interact(a: Agent, b: Agent, rng: random.Random, tick: int = 0) -> Interaction:
     """One encounter between two agents; updates trust, memory and needs."""
     na, nb = a.npc, b.npc
+    detail: Dict[str, object] = {}
     if rng.random() < goodwill(na, nb):
         gossip = _gossip_topics(na, nb)
         if gossip and rng.random() < 0.3:
             kind = InteractionKind.GOSSIP
             _share_reputations(na, nb, gossip)
-            _record(na, nb, "gossiped with", EmotionLayer.HAPPY, 0.4)
-            _record(nb, na, "gossiped with", EmotionLayer.HAPPY, 0.4)
+            detail["topics"] = gossip
+            detail["listener_trust"] = {t: nb.social.trust_of(t) for t in gossip}
+            _record(na, nb, "gossiped with", EmotionLayer.HAPPY, 0.4, tick)
+            _record(nb, na, "gossiped with", EmotionLayer.HAPPY, 0.4, tick)
         else:
             kind = InteractionKind.COOPERATE
-            _record(na, nb, "worked together with", EmotionLayer.HAPPY, 0.5)
-            _record(nb, na, "worked together with", EmotionLayer.HAPPY, 0.5)
+            _record(na, nb, "worked together with", EmotionLayer.HAPPY, 0.5, tick)
+            _record(nb, na, "worked together with", EmotionLayer.HAPPY, 0.5, tick)
         na.social.adjust_trust(nb.npc_id, 0.15)
         nb.social.adjust_trust(na.npc_id, 0.15)
         b.needs.loneliness = max(0.0, b.needs.loneliness - 0.2)
     else:
         kind = InteractionKind.ARGUE
-        _record(na, nb, "argued with", EmotionLayer.ANGRY, 0.7)
-        _record(nb, na, "argued with", EmotionLayer.ANGRY, 0.7)
+        _record(na, nb, "argued with", EmotionLayer.ANGRY, 0.7, tick)
+        _record(nb, na, "argued with", EmotionLayer.ANGRY, 0.7, tick)
         na.social.adjust_trust(nb.npc_id, -0.25)
         nb.social.adjust_trust(na.npc_id, -0.25)
-    return Interaction(kind, na.npc_id, nb.npc_id)
+    return Interaction(kind, na.npc_id, nb.npc_id,
+                       na.social.trust_of(nb.npc_id), nb.social.trust_of(na.npc_id),
+                       detail)
 
 
 def _gossip_topics(teller: NPC, listener: NPC) -> List[str]:
@@ -279,6 +290,7 @@ class World:
     tracker: CommunityTracker = field(default_factory=CommunityTracker)
     tick: int = 0
     interactions: List[Interaction] = field(default_factory=list)
+    log: EventLog = field(default_factory=EventLog)
 
     def add(self, agent: Agent) -> None:
         if agent.npc.state == NPCState.INITIAL:
@@ -299,6 +311,11 @@ class World:
         return Perception(threat=threat, nearby=near[:self.max_nearby],
                           food_available=self.rng.random() < self.food_rate)
 
+    def kill(self, npc_id: str, reason: str = "") -> None:
+        """Kill an NPC and record it (use this rather than npc.die() directly)."""
+        self.agents[npc_id].npc.die(reason)
+        self.log.add("lifecycle", self.tick, npc=npc_id, event="died", reason=reason)
+
     def step(self) -> Dict[str, object]:
         self.tick += 1
         order = sorted(self.agents)
@@ -307,7 +324,16 @@ class World:
         happened: List[Interaction] = []
         for npc_id in order:
             agent = self.agents[npc_id]
-            action = agent.step(self._perceive(agent))
+            action = agent.step(self._perceive(agent), {"tick": self.tick})
+            rec = agent.last_step
+            if rec is not None:
+                self.log.add(
+                    "action", self.tick, npc=npc_id, action=rec.action,
+                    partner=rec.partner, what=rec.what, threat=rec.threat,
+                    nearby=rec.nearby, needs=rec.needs, emotion=rec.emotion,
+                    personality_before=rec.personality_before,
+                    personality_after=rec.personality_after,
+                    changes=rec.changes, reflection=rec.reflection)
             partner = agent.last_partner
             if action != Action.SOCIALIZE or partner is None:
                 continue
@@ -316,10 +342,21 @@ class World:
             if other is None or not other.npc.is_alive or pair in done:
                 continue
             done.add(pair)
-            happened.append(interact(agent, other, self.rng))
+            it = interact(agent, other, self.rng, self.tick)
+            happened.append(it)
+            self.log.add("interaction", self.tick, kind=it.kind, a=it.a, b=it.b,
+                         trust_ab=it.trust_ab, trust_ba=it.trust_ba, **it.detail)
         self.interactions.extend(happened)
         events = self.tracker.update(self.agents)
+        for name in events["formed"]:
+            c = self.tracker.communities[name]
+            self.log.add("community", self.tick, event="formed", name=name,
+                         members=sorted(c.members), leader=c.leader,
+                         leadership=c.leadership, institution=c.institution)
+        for name in events["dissolved"]:
+            self.log.add("community", self.tick, event="dissolved", name=name)
         summary: Dict[str, object] = {"interactions": happened, **events}
         if self.tick % self.observe_every == 0:
             summary["emergent"] = self.emergent.observe()
+            self.log.add("world", self.tick, **summary["emergent"])
         return summary
