@@ -72,6 +72,7 @@ class Agent:
     traits: Optional[TraitProfile] = None
     ticks: int = 0
     last_action: Optional[Action] = None
+    last_partner: Optional[str] = None   # npc_id socialized with this tick
 
     def __post_init__(self) -> None:
         if self.traits is None:
@@ -128,6 +129,13 @@ class Agent:
                      key=lambda a: a.value)
         return self.rng.choice(top)
 
+    def _choose_partner(self, nearby: List[str]) -> str:
+        """Prefer people it trusts, but anyone nearby can be picked."""
+        ids = sorted(nearby)
+        soc = self.npc.social
+        weights = [max(0.05, soc.trust_of(i) + 1.1) for i in ids]
+        return self.rng.choices(ids, weights=weights, k=1)[0]
+
     # -- act ---------------------------------------------------------------
     def act(self, action: Action, p: Perception) -> Dict[str, Any]:
         """Apply the action's effects on needs; return an event for memory."""
@@ -146,7 +154,8 @@ class Agent:
             event.update(content="rested")
         elif action == Action.SOCIALIZE and p.nearby:
             n.loneliness = _clamp(n.loneliness - 0.4)
-            other = self.rng.choice(sorted(p.nearby))
+            other = self._choose_partner(p.nearby)
+            self.last_partner = other
             if soc.relationship_with(other) == RelationshipLayer.STRANGER:
                 soc.set_relationship(other, RelationshipLayer.ACQUAINTANCE)
             event.update(content=f"spent time with {other}",
@@ -172,6 +181,7 @@ class Agent:
         p = p or Perception()
         self.needs.tick()
         action = self.decide(p)
+        self.last_partner = None
         event = self.act(action, p)
         ctx = dict(context or {})
         ctx["events"] = list(ctx.get("events", [])) + [event]

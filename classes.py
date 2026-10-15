@@ -434,8 +434,34 @@ class SocialIntelligence(IntelligenceBase):
     conflict: ConflictLayer = ConflictLayer.NEUTRAL
     influence: InfluenceLayer = InfluenceLayer.MODERATE
 
+    trust: Dict[str, float] = field(default_factory=dict)  # npc_id -> -1..1
+
     def set_relationship(self, npc_id: str, kind: RelationshipLayer) -> None:
         self.relationships[npc_id] = kind
+
+    def trust_of(self, npc_id: str) -> float:
+        return self.trust.get(npc_id, 0.0)
+
+    def adjust_trust(self, npc_id: str, delta: float) -> float:
+        """Shift trust in another NPC and relabel the relationship to match.
+
+        Thresholds are placeholder heuristics. A LOVED_ONE stays one while
+        trust remains positive; otherwise the label follows trust.
+        """
+        t = max(-1.0, min(1.0, self.trust_of(npc_id) + delta))
+        self.trust[npc_id] = t
+        if self.relationships.get(npc_id) == RelationshipLayer.LOVED_ONE and t > 0.5:
+            return t
+        if t >= 0.6:
+            kind = RelationshipLayer.FRIEND
+        elif t >= 0.15:
+            kind = RelationshipLayer.ACQUAINTANCE
+        elif t <= -0.4:
+            kind = RelationshipLayer.ENEMY
+        else:
+            kind = RelationshipLayer.NEUTRAL
+        self.relationships[npc_id] = kind
+        return t
 
     def relationship_with(self, npc_id: str) -> RelationshipLayer:
         return self.relationships.get(npc_id, RelationshipLayer.STRANGER)
