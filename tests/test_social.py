@@ -275,9 +275,16 @@ def test_rival_communities_become_hostile():
             b.npc.social.adjust_trust(a.npc.npc_id, -0.6)
     t = CommunityTracker()
     t.update(by_id)
-    assert t.rivals() == [("Community-1", "Community-2")]
-    assert agents[0].npc.collective.alliances["Community-2"] == AllianceLayer.HOSTILE
-    assert agents[5].npc.collective.alliances["Community-1"] == AllianceLayer.HOSTILE
+
+    def name_of(agent):   # names depend on (random) id order, so look them up
+        return next(n for n, c in t.communities.items() if agent.npc.npc_id in c.members)
+
+    mine, theirs = name_of(agents[0]), name_of(agents[5])
+    assert mine != theirs
+    assert t.rivals() == [tuple(sorted((mine, theirs)))]
+    assert agents[0].npc.collective.alliances[theirs] == AllianceLayer.HOSTILE
+    assert agents[5].npc.collective.alliances[mine] == AllianceLayer.HOSTILE
+    assert agents[0].npc.collective.alliances[mine] == AllianceLayer.ALLIANCE
 
 
 # --- world -------------------------------------------------------------------------
