@@ -338,6 +338,7 @@ class MemoryEntry:
     emotion: Optional[EmotionLayer] = None
     salience: float = 0.5  # 0.0 (trivial) .. 1.0 (unforgettable)
     timestamp: datetime = field(default_factory=datetime.now)
+    tags: Tuple[str, ...] = ()  # e.g. "npc:ab12cd34", "danger"; used for retrieval
 
 
 @dataclass
@@ -370,8 +371,10 @@ class IndividualIntelligence(IntelligenceBase):
 
     def remember(self, content: str, emotion: Optional[EmotionLayer] = None,
                  salience: float = 0.5,
-                 kind: MemoryLayer = MemoryLayer.SHORT_TERM) -> MemoryEntry:
-        entry = MemoryEntry(content, kind, emotion, max(0.0, min(1.0, salience)))
+                 kind: MemoryLayer = MemoryLayer.SHORT_TERM,
+                 tags: Iterable[str] = ()) -> MemoryEntry:
+        entry = MemoryEntry(content, kind, emotion, max(0.0, min(1.0, salience)),
+                            tags=tuple(tags))
         self.memories.append(entry)
         return entry
 
@@ -411,7 +414,8 @@ class IndividualIntelligence(IntelligenceBase):
             if emotion is not None:
                 self.emotion = EmotionLayer(emotion) if isinstance(emotion, str) else emotion
                 changes["emotion"] = self.emotion
-            self.remember(event["content"], self.emotion, event.get("salience", 0.5))
+            self.remember(event["content"], self.emotion, event.get("salience", 0.5),
+                          tags=event.get("tags", ()))
         forgotten = self._consolidate()
         if forgotten:
             changes["forgotten"] = forgotten
