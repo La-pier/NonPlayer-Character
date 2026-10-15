@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from adaptation import TraitProfile, learn, reflect, sentiment
 from classes import (
-    NPC, TICKING_STATES, EmotionLayer, GoalLayer, Personality, RelationshipLayer,
+    NPC, TICKING_STATES, BeliefLayer, EmotionLayer, GoalLayer, Personality,
+    RelationshipLayer,
 )
 
 
@@ -66,7 +68,15 @@ class Agent:
     needs: Needs = field(default_factory=Needs)
     rng: random.Random = field(default_factory=random.Random)
     tie_margin: float = 0.05   # actions within this of the best may be chosen
+    reflect_every: int = 10    # ticks between reflections
+    traits: Optional[TraitProfile] = None
+    ticks: int = 0
     last_action: Optional[Action] = None
+
+    def __post_init__(self) -> None:
+        if self.traits is None:
+            self.traits = TraitProfile.from_personality(
+                self.npc.individual.personality)
 
     # -- decide ------------------------------------------------------------
     def effective_threat(self, p: Perception) -> float:
@@ -91,9 +101,13 @@ class Agent:
         if p.nearby:
             friend = any(soc.relationship_with(i) == RelationshipLayer.FRIEND
                          for i in p.nearby)
+            # Past experience with these particular NPCs colours the choice.
+            feeling = sentiment(ind, [f"npc:{i}" for i in p.nearby])
             scores[Action.SOCIALIZE] = (n.loneliness + (0.2 if friend else 0.0)
                                         + (0.1 if ind.emotion == EmotionLayer.HAPPY
-                                           else 0.0))
+                                           else 0.0) + 0.3 * feeling)
+        if threat > 0 and BeliefLayer.PESSIMISTIC in ind.beliefs:
+            scores[Action.AVOID] += 0.1
         for action, bias in PERSONALITY_BIAS.get(ind.personality, {}).items():
             scores[action] += bias
         # Biases must not make an unavailable action attractive.
@@ -126,7 +140,7 @@ class Agent:
             n.hunger = _clamp(n.hunger - (0.5 if fed else 0.1))
             event.update(content="found food" if fed else "searched for food, found little",
                          emotion=EmotionLayer.RELIEVED if fed else EmotionLayer.SAD,
-                         salience=0.4 if fed else 0.5)
+                         salience=0.4 if fed else 0.5, tags=("food",))
         elif action == Action.REST:
             n.fatigue = _clamp(n.fatigue - 0.5)
             event.update(content="rested")
@@ -136,11 +150,12 @@ class Agent:
             if soc.relationship_with(other) == RelationshipLayer.STRANGER:
                 soc.set_relationship(other, RelationshipLayer.ACQUAINTANCE)
             event.update(content=f"spent time with {other}",
-                         emotion=EmotionLayer.HAPPY, salience=0.4)
+                         emotion=EmotionLayer.HAPPY, salience=0.4,
+                         tags=("social", f"npc:{other}"))
         elif action == Action.AVOID:
             n.fatigue = _clamp(n.fatigue + 0.05)   # running is tiring
             event.update(content="avoided danger", emotion=EmotionLayer.FEARFUL,
-                         salience=0.6)
+                         salience=0.6, tags=("danger",))
         elif action == Action.PURSUE_GOAL and ind.goals:
             event.update(content=f"worked toward {ind.goals[0].value}", salience=0.3)
         return event
@@ -162,4 +177,15 @@ class Agent:
         ctx["events"] = list(ctx.get("events", [])) + [event]
         self.npc.tick(ctx)
         self.last_action = action
+        self._adapt(action, event)
         return action
+
+    def _adapt(self, action: Action, event: Dict[str, Any]) -> None:
+        """Learn from the outcome; periodically reflect on recent experience."""
+        ind = self.npc.individual
+        self.ticks += 1
+        self.traits.tick()
+        learn(self.traits, action.value, event.get("emotion"))
+        ind.personality = self.traits.dominant(ind.personality)
+        if self.ticks % self.reflect_every == 0:
+            reflect(ind)
