@@ -1,0 +1,25 @@
+{
+  "communities": [],
+  "config": {
+    "npcs": 12,
+    "seed": 7
+  },
+  "digest": "deef2ddb0e6221878bb95dc8c092561aabae7d141e5443f6f5ec19361ed13aad",
+  "python": "3.13",
+  "summary": {
+    "actions": {
+      "avoid": 703,
+      "pursue_goal": 778,
+      "rest": 307,
+      "seek_food": 264,
+      "socialize": 348
+    },
+    "interactions": {
+      "argue": 118,
+      "cooperate": 169,
+      "gossip": 52
+    },
+    "records": 2759
+  },
+  "ticks": 200
+}

@@ -337,8 +337,9 @@ class MemoryEntry:
     kind: MemoryLayer = MemoryLayer.SHORT_TERM
     emotion: Optional[EmotionLayer] = None
     salience: float = 0.5  # 0.0 (trivial) .. 1.0 (unforgettable)
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=datetime.now)  # informational only
     tags: Tuple[str, ...] = ()  # e.g. "npc:ab12cd34", "danger"; used for retrieval
+    tick: int = 0               # simulation time; logic uses this, never `timestamp`
 
 
 @dataclass
@@ -372,9 +373,9 @@ class IndividualIntelligence(IntelligenceBase):
     def remember(self, content: str, emotion: Optional[EmotionLayer] = None,
                  salience: float = 0.5,
                  kind: MemoryLayer = MemoryLayer.SHORT_TERM,
-                 tags: Iterable[str] = ()) -> MemoryEntry:
+                 tags: Iterable[str] = (), tick: int = 0) -> MemoryEntry:
         entry = MemoryEntry(content, kind, emotion, max(0.0, min(1.0, salience)),
-                            tags=tuple(tags))
+                            tags=tuple(tags), tick=tick)
         self.memories.append(entry)
         return entry
 
@@ -390,6 +391,11 @@ class IndividualIntelligence(IntelligenceBase):
                 added.append(goal)
         return added
 
+    def consolidate(self) -> int:
+        """Promote salient short-term memories and forget any overflow.
+        Call after adding memories outside `update` so the limit always holds."""
+        return self._consolidate()
+
     def _consolidate(self) -> int:
         """Promote salient short-term memories to long-term; forget the overflow."""
         for m in self.recall(MemoryLayer.SHORT_TERM):
@@ -398,7 +404,10 @@ class IndividualIntelligence(IntelligenceBase):
         short = self.recall(MemoryLayer.SHORT_TERM)
         overflow = len(short) - self.short_term_limit
         if overflow > 0:
-            forgotten = sorted(short, key=lambda m: (m.salience, m.timestamp))[:overflow]
+            # Least salient first; ties go to the oldest (by simulation tick, then
+            # insertion order). Never wall-clock time, so runs are reproducible.
+            order = {id(m): i for i, m in enumerate(self.memories)}
+            forgotten = sorted(short, key=lambda m: (m.salience, m.tick, order[id(m)]))[:overflow]
             drop = {id(m) for m in forgotten}
             self.memories = [m for m in self.memories if id(m) not in drop]
             return overflow
@@ -415,7 +424,7 @@ class IndividualIntelligence(IntelligenceBase):
                 self.emotion = EmotionLayer(emotion) if isinstance(emotion, str) else emotion
                 changes["emotion"] = self.emotion
             self.remember(event["content"], self.emotion, event.get("salience", 0.5),
-                          tags=event.get("tags", ()))
+                          tags=event.get("tags", ()), tick=context.get("tick", 0))
         forgotten = self._consolidate()
         if forgotten:
             changes["forgotten"] = forgotten

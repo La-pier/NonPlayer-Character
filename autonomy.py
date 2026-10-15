@@ -40,6 +40,23 @@ class Needs:
 
 
 @dataclass
+class StepRecord:
+    """Everything notable that happened to one agent in one tick."""
+    tick: int
+    action: Action
+    partner: Optional[str]
+    what: str                       # the event text that went into memory
+    threat: float
+    nearby: List[str]
+    needs: Dict[str, float]         # after acting
+    emotion: EmotionLayer
+    personality_before: Personality
+    personality_after: Personality
+    changes: Dict[str, Any]         # layer updates: new goals, forgotten memories...
+    reflection: Dict[str, Any]      # belief / goal revisions, if it reflected
+
+
+@dataclass
 class Perception:
     """What an NPC can sense this tick."""
     threat: float = 0.0                 # 0 (calm) .. 1 (mortal danger)
@@ -73,6 +90,7 @@ class Agent:
     ticks: int = 0
     last_action: Optional[Action] = None
     last_partner: Optional[str] = None   # npc_id socialized with this tick
+    last_step: Optional[StepRecord] = None
 
     def __post_init__(self) -> None:
         if self.traits is None:
@@ -175,22 +193,37 @@ class Agent:
         """Needs rise, the NPC picks and performs an action, layers update.
 
         Returns None (and does nothing) unless the NPC is in a ticking state.
+        `context["tick"]` is the simulation clock (defaults to this agent's own
+        step count); it stamps the memories made. The step is described in
+        `last_step`.
         """
+        self.last_step = None
         if self.npc.state not in TICKING_STATES:
             return None
         p = p or Perception()
+        ctx = dict(context or {})
+        tick = ctx.setdefault("tick", self.ticks + 1)
+        before = self.npc.individual.personality
         self.needs.tick()
         action = self.decide(p)
         self.last_partner = None
         event = self.act(action, p)
-        ctx = dict(context or {})
         ctx["events"] = list(ctx.get("events", [])) + [event]
-        self.npc.tick(ctx)
+        layer_changes = self.npc.tick(ctx)
         self.last_action = action
-        self._adapt(action, event)
+        reflection = self._adapt(action, event)
+        n = self.needs
+        self.last_step = StepRecord(
+            tick=tick, action=action, partner=self.last_partner,
+            what=event["content"], threat=p.threat, nearby=list(p.nearby),
+            needs={"hunger": n.hunger, "fatigue": n.fatigue,
+                   "loneliness": n.loneliness},
+            emotion=self.npc.individual.emotion, personality_before=before,
+            personality_after=self.npc.individual.personality,
+            changes=layer_changes.get("individual", {}), reflection=reflection)
         return action
 
-    def _adapt(self, action: Action, event: Dict[str, Any]) -> None:
+    def _adapt(self, action: Action, event: Dict[str, Any]) -> Dict[str, Any]:
         """Learn from the outcome; periodically reflect on recent experience."""
         ind = self.npc.individual
         self.ticks += 1
@@ -198,4 +231,5 @@ class Agent:
         learn(self.traits, action.value, event.get("emotion"))
         ind.personality = self.traits.dominant(ind.personality)
         if self.ticks % self.reflect_every == 0:
-            reflect(ind)
+            return reflect(ind)
+        return {}
